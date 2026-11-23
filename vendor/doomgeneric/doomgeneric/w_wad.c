@@ -24,6 +24,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
+
 #include "doomtype.h"
 
 #include "config.h"
@@ -89,7 +91,11 @@ static void ExtendLumpInfo(int newnumlumps)
     lumpinfo_t *newlumpinfo;
     unsigned int i;
 
-    newlumpinfo = calloc(newnumlumps, sizeof(lumpinfo_t));
+    newlumpinfo = heap_caps_malloc(newnumlumps * sizeof(lumpinfo_t),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (newlumpinfo != NULL) {
+        memset(newlumpinfo, 0, newnumlumps * sizeof(lumpinfo_t));
+    }
 
     if (newlumpinfo == NULL)
     {

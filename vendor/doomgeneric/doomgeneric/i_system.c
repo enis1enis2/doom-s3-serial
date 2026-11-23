@@ -23,6 +23,8 @@
 
 #include <stdarg.h>
 
+#include "esp_heap_caps.h"
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -116,7 +118,7 @@ static byte *AutoAllocMemory(int *size, int default_ram, int min_ram)
 
         *size = default_ram * 1024 * 1024;
 
-        zonemem = malloc(*size);
+        zonemem = heap_caps_malloc(*size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
         // Failed to allocate?  Reduce zone size until we reach a size
         // that is acceptable.

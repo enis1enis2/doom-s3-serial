@@ -8,10 +8,12 @@
 #include "serial_out.h"
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -67,6 +69,15 @@ static int write_all(const uint8_t *data, size_t len)
     return 0;
 }
 
+static void *alloc_psram(size_t size, bool zero)
+{
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ptr != NULL && zero) {
+        memset(ptr, 0, size);
+    }
+    return ptr;
+}
+
 void serial_out_init(void)
 {
     s_tx_lock = xSemaphoreCreateMutex();
@@ -74,17 +85,17 @@ void serial_out_init(void)
 
     const int cols = CONFIG_DOOM_ANSI_COLS;
     const int rows = CONFIG_DOOM_ANSI_ROWS;
-    s_cells = calloc((size_t)cols * rows * 2, sizeof(uint16_t));
-    s_have_prev = calloc((size_t)cols * rows, 1);
+    s_cells = alloc_psram((size_t)cols * rows * 2 * sizeof(uint16_t), true);
+    s_have_prev = alloc_psram((size_t)cols * rows, true);
     s_ansi_buf_size = (size_t)cols * rows * 64 + 1024;
-    s_ansi_buf = malloc(s_ansi_buf_size);
+    s_ansi_buf = alloc_psram(s_ansi_buf_size, false);
 
     const int rw = CONFIG_DOOM_RAW_WIDTH;
     const int rh = CONFIG_DOOM_RAW_HEIGHT;
-    s_raw_buf = malloc((size_t)rw * rh * 2 + 16);
+    s_raw_buf = alloc_psram((size_t)rw * rh * 2 + 16, false);
 
     if (!s_cells || !s_have_prev || !s_ansi_buf || !s_raw_buf) {
-        ESP_LOGE(TAG, "failed to allocate video encoder buffers");
+        ESP_LOGE(TAG, "failed to allocate video encoder buffers from PSRAM");
         abort();
     }
     memset(s_xterm_map, 0, sizeof(s_xterm_map));
