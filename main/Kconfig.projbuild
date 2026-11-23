@@ -1,0 +1,64 @@
+menu "DOOM serial port"
+
+    choice DOOM_TRANSPORT
+        prompt "Video + keyboard transport"
+        default DOOM_TRANSPORT_USB_JTAG
+        help
+            USB-Serial-JTAG is built into the ESP32-S3 and is much faster, so it is
+            the recommended choice. UART1 needs external USB-UART hardware and is
+            limited by baud rate.
+        config DOOM_TRANSPORT_USB_JTAG
+            bool "USB-Serial-JTAG (recommended)"
+        config DOOM_TRANSPORT_UART1
+            bool "UART1 (TX=17, RX=18)"
+    endchoice
+
+    config DOOM_UART1_BAUD
+        int "UART1 baud rate"
+        default 3000000
+        depends on DOOM_TRANSPORT_UART1
+        range 115200 5000000
+
+    config DOOM_UART1_TX_PIN
+        int "UART1 TX pin"
+        default 17
+        depends on DOOM_TRANSPORT_UART1
+
+    config DOOM_UART1_RX_PIN
+        int "UART1 RX pin"
+        default 18
+        depends on DOOM_TRANSPORT_UART1
+
+endmenu
+
+menu "DOOM serial video"
+
+    config DOOM_ANSI_COLS
+        int "ANSI terminal columns (half-block cells)"
+        default 80
+        range 40 160
+        help
+            80 columns x 50 rows renders a 160x100 image using the upper-half-block
+            character and is a good speed/quality trade-off.
+
+    config DOOM_ANSI_ROWS
+        int "ANSI terminal rows (half-block cells)"
+        default 50
+        range 20 100
+
+    config DOOM_RAW_WIDTH
+        int "Raw framebuffer width"
+        default 160
+        range 80 320
+
+    config DOOM_RAW_HEIGHT
+        int "Raw framebuffer height"
+        default 100
+        range 50 200
+
+    config DOOM_TARGET_FPS
+        int "Frame cap"
+        default 20
+        range 5 35
+
+endmenu

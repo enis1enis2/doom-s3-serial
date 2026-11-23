@@ -1,0 +1,36 @@
+# Local ESP-IDF toolchain, download cache, and Python environments
+/esp-idf/
+/esp-idf-tools/
+/idf-python-env/
+/python-dist/
+/python-userbase/
+/bootstrap-python/
+/host-tools/
+/host-libs/
+/host-bin/
+/win-venv/
+
+# Build output, except the prebuilt firmware binaries
+/build/*
+!/build/doom_s3_serial.bin
+!/build/bootloader/
+/build/bootloader/*
+!/build/bootloader/bootloader.bin
+!/build/partition_table/
+/build/partition_table/*
+!/build/partition_table/partition-table.bin
+
+# Generated/raw intermediates
+/doom1.wad.raw
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Upstream metadata for the vendored engine; source files are committed directly
+vendor/doomgeneric/.git/
+vendor/doomgeneric/.git-upstream/
+
+# Editor/OS files
+.DS_Store
+*.swp
