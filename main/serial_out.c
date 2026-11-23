@@ -119,7 +119,7 @@ void serial_out_frame(serial_frame_type_t type, const uint8_t *payload, size_t l
         return;
     }
 
-    uint8_t header[7];
+    uint8_t header[5];
     header[0] = FRAME_SYNC0;
     header[1] = FRAME_SYNC1;
     header[2] = (uint8_t)type;
@@ -128,14 +128,17 @@ void serial_out_frame(serial_frame_type_t type, const uint8_t *payload, size_t l
 
     uint16_t crc = crc16_ccitt(&header[2], 3, 0xffff);
     crc = crc16_ccitt(payload, len, crc);
-    header[5] = (uint8_t)(crc & 0xff);
-    header[6] = (uint8_t)(crc >> 8);
+    uint8_t trailer[2] = {
+        (uint8_t)(crc & 0xff),
+        (uint8_t)(crc >> 8),
+    };
 
     xSemaphoreTake(s_tx_lock, portMAX_DELAY);
     write_all(header, sizeof(header));
     if (len) {
         write_all(payload, len);
     }
+    write_all(trailer, sizeof(trailer));
     xSemaphoreGive(s_tx_lock);
 }
 
