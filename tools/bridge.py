@@ -13,11 +13,10 @@ Examples:
   python3 tools/bridge.py --port /dev/ttyACM0 --mode ansi
   python3 tools/bridge.py --port /dev/ttyACM0 --mode raw --raw-out frame.ppm
   python3 tools/bridge.py --port /dev/ttyUSB0 --mode raw --no-display
-  tools\\bridge.bat --port COM7 --mode ansi
+  tools\\bridge.bat --port COM3 --mode ansi
 """
 
 import argparse
-import binascii
 import os
 import struct
 import sys
@@ -70,13 +69,12 @@ KEY_RSHIFT = 0x80 + 0x36
 KEY_RCTRL = 0x80 + 0x1D
 
 
-def crc16_ccitt(data, crc=0xFFFF):
-    """CCITT CRC-16, polynomial 0x1021, initial value 0xffff.
-
-    binascii.crc_hqx is the C implementation of exactly the same CRC used by
-    the firmware; using it avoids a Python bit loop for every payload byte.
-    """
-    return binascii.crc_hqx(data, crc)
+def crc16_ccitt(data: bytes, crc: int = 0xFFFF) -> int:
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
 
 
 class FrameParser:
@@ -90,9 +88,7 @@ class FrameParser:
         self.length = 0
         self.pos = 0
         self.payload = bytearray()
-        self.header_crc = 0
         self.crc = 0
-        self.rx_crc0 = 0
 
     def feed(self, data: bytes):
         frames = []
@@ -109,37 +105,42 @@ class FrameParser:
 
             elif self.state == self.S_TYPE:
                 self.frame_type = byte
-                self.header_crc = crc16_ccitt(bytes((byte,)))
+                self.crc = crc16_ccitt(bytes([byte]))
                 self.state = self.S_LEN0
 
             elif self.state == self.S_LEN0:
                 self.length = byte
-                self.header_crc = crc16_ccitt(bytes((byte,)), self.header_crc)
+                self.crc = crc16_ccitt(bytes([byte]), self.crc)
                 self.state = self.S_LEN1
 
             elif self.state == self.S_LEN1:
                 self.length |= byte << 8
-                self.crc = crc16_ccitt(bytes((byte,)), self.header_crc)
+                self.crc = crc16_ccitt(bytes([byte]), self.crc)
                 self.pos = 0
-                if self.length <= 65535:
+                if self.length == 0:
+                    self.state = self.S_CRC0
+                elif self.length <= 65535:
                     self.payload = bytearray(self.length)
-                    self.state = self.S_PAYLOAD if self.length else self.S_CRC0
+                    self.state = self.S_PAYLOAD
                 else:
                     self.state = self.S_SYNC0
 
             elif self.state == self.S_PAYLOAD:
                 self.payload[self.pos] = byte
+                self.crc = crc16_ccitt(bytes([byte]), self.crc)
                 self.pos += 1
                 if self.pos == self.length:
                     self.state = self.S_CRC0
 
             elif self.state == self.S_CRC0:
-                self.rx_crc0 = byte
-                self.state = self.S_CRC1
+                if byte != self.crc & 0xFF:
+                    self._log_bad_crc()
+                    self.state = self.S_SYNC0
+                else:
+                    self.state = self.S_CRC1
 
             elif self.state == self.S_CRC1:
-                expected = crc16_ccitt(self.payload, self.crc)
-                if self.rx_crc0 != (expected & 0xFF) or byte != ((expected >> 8) & 0xFF):
+                if byte != (self.crc >> 8) & 0xFF:
                     self._log_bad_crc()
                 else:
                     frames.append((self.frame_type, bytes(self.payload)))
@@ -148,14 +149,7 @@ class FrameParser:
 
     @staticmethod
     def _log_bad_crc():
-        global _BAD_CRC_LAST
-        now = time.monotonic()
-        if now - _BAD_CRC_LAST >= 1.0:
-            sys.stderr.write("[bridge] bad frame CRC\r\n")
-            _BAD_CRC_LAST = now
-
-
-_BAD_CRC_LAST = 0.0
+        sys.stderr.write("[bridge] bad frame CRC\r\n")
 
 
 class Sender:
@@ -164,18 +158,17 @@ class Sender:
         self.lock = threading.Lock()
 
     def send(self, frame_type: int, payload: bytes):
-        header = bytes((HOST_SYNC0, HOST_SYNC1, frame_type,
-                        len(payload) & 0xFF, (len(payload) >> 8) & 0xFF))
-        crc = crc16_ccitt(header[2:5])
-        crc = crc16_ccitt(payload, crc)
+        header = bytes([HOST_SYNC0, HOST_SYNC1, frame_type,
+                        len(payload) & 0xFF, (len(payload) >> 8) & 0xFF])
+        crc = crc16_ccitt(header[2:5] + payload)
         with self.lock:
             self.ser.write(header + payload + struct.pack("<H", crc))
 
     def key(self, pressed: bool, key: int):
-        self.send(HOST_KEY, bytes((1 if pressed else 0, key & 0xFF)))
+        self.send(HOST_KEY, bytes([1 if pressed else 0, key & 0xFF]))
 
     def mode(self, raw: bool):
-        self.send(HOST_MODE, bytes((1 if raw else 0,)))
+        self.send(HOST_MODE, bytes([1 if raw else 0]))
 
 
 XTERM_LEVELS = (0, 95, 135, 175, 215, 255)
@@ -212,53 +205,14 @@ def nearest_xterm(r: int, g: int, b: int) -> int:
     return best
 
 
-def nearest_level(v: int) -> int:
-    best, best_dist = 0, 1 << 60
-    for idx, level in enumerate(XTERM_LEVELS):
-        d = abs(v - level)
-        if d < best_dist:
-            best_dist, best = d, idx
-    return best
-
-
-def xterm_from_rgb(r: int, g: int, b: int) -> int:
-    """O(1) approximation of nearest_xterm, used for averaged colours."""
-    high = max(r, g, b)
-    low = min(r, g, b)
-    if high <= 8:
-        return 0
-    if high - low <= 12 and 8 <= high <= 238:
-        v = (r + g + b) // 3
-        idx = max(0, min(23, (v - 8 + 5) // 10))
-        return 232 + idx
-    if low >= 240:
-        return 231
-    return (16 + 36 * nearest_level(r) + 6 * nearest_level(g) +
-            nearest_level(b))
-
-
 class RawTerminal:
     """Convert raw indexed frames into dirty-cell half-block ANSI."""
 
     def __init__(self):
-        self.set_size(80, 50)
+        self.cols = 80
+        self.rows = 50
         self.map = list(range(256))
-        self.blend = [0] * 65536
-        self.idx_bytes = [bytes((i,)) for i in range(256)]
-        self.fg_esc = [f"\x1b[38;5;{i}m".encode() for i in range(256)]
-        self.bg_esc = [f"\x1b[48;5;{i}m".encode() for i in range(256)]
-        self.block = "\u2580".encode()
-        self.have_prev = False
-
-    def set_size(self, cols: int, rows: int):
-        self.cols = cols
-        self.rows = rows
-        self.prev = [-1] * (cols * rows)
-        self.cursor = [
-            f"\x1b[{cy + 1};{cx + 1}H".encode()
-            for cy in range(rows) for cx in range(cols)
-        ]
-        self.have_prev = False
+        self.prev = {}
 
     def set_palette(self, palette: bytes):
         if len(palette) < 768:
@@ -267,19 +221,7 @@ class RawTerminal:
             nearest_xterm(palette[i * 3], palette[i * 3 + 1], palette[i * 3 + 2])
             for i in range(256)
         ]
-        self.blend = [0] * 65536
-        for a in range(256):
-            ar, ag, ab = palette[a * 3], palette[a * 3 + 1], palette[a * 3 + 2]
-            for b in range(a, 256):
-                br = palette[b * 3]
-                bg = palette[b * 3 + 1]
-                bb = palette[b * 3 + 2]
-                idx = xterm_from_rgb((ar + br + 1) >> 1,
-                                     (ag + bg + 1) >> 1,
-                                     (ab + bb + 1) >> 1)
-                self.blend[a * 256 + b] = idx
-                self.blend[b * 256 + a] = idx
-        self.have_prev = False
+        self.prev = {}
         sys.stdout.write("\x1b[2J\x1b[H")
         sys.stdout.flush()
 
@@ -294,7 +236,6 @@ class RawTerminal:
         pos = 4
         for y in range(height):
             x = 0
-            base = y * width
             while x < width and pos + 1 < len(payload):
                 run = payload[pos]
                 idx = payload[pos + 1]
@@ -302,54 +243,48 @@ class RawTerminal:
                 if run == 0:
                     break
                 end = min(x + run, width)
-                fb[base + x:base + end] = self.idx_bytes[idx] * (end - x)
+                fb[y * width + x:y * width + end] = bytes([idx]) * (end - x)
                 x = end
 
-        cols, rows = self.cols, self.rows
-        cells = [0] * (cols * rows)
-        blend = self.blend
+        cols = min(self.cols, (width + 1) // 2)
+        rows = min(self.rows, (height + 1) // 2)
+        cells = {}
         for cy in range(rows):
             y0 = cy * height // rows
             y1 = min((cy + 1) * height // rows - 1, height - 1)
-            row0 = y0 * width
-            row1 = y1 * width
             for cx in range(cols):
-                xa = cx * width // cols
-                xb = min((cx + 1) * width // cols - 1, width - 1)
-                top = blend[fb[row0 + xa] * 256 + fb[row0 + xb]]
-                bot = blend[fb[row1 + xa] * 256 + fb[row1 + xb]]
-                cells[cy * cols + cx] = (top << 8) | bot
+                x = cx * width // cols
+                top = self.map[fb[y0 * width + x]]
+                bot = self.map[fb[y1 * width + x]]
+                cells[(cy, cx)] = (top, bot)
 
         out = bytearray()
         last_fg = last_bg = -1
-        full = not self.have_prev
+        full = not self.prev
         for cy in range(rows):
             cx = 0
             while cx < cols:
-                i = cy * cols + cx
-                cell = cells[i]
-                if not full and self.prev[i] == cell:
+                cell = cells[(cy, cx)]
+                if not full and self.prev.get((cy, cx)) == cell:
                     cx += 1
                     continue
 
-                out += self.cursor[i]
+                out += f"\x1b[{cy + 1};{cx + 1}H".encode()
                 while cx < cols:
-                    i = cy * cols + cx
-                    cell = cells[i]
-                    if not full and self.prev[i] == cell:
+                    cell = cells[(cy, cx)]
+                    if not full and self.prev.get((cy, cx)) == cell:
                         break
-                    fg, bg = cell >> 8, cell & 0xFF
+                    fg, bg = cell
                     if fg != last_fg:
-                        out += self.fg_esc[fg]
+                        out += f"\x1b[38;5;{fg}m".encode()
                         last_fg = fg
                     if bg != last_bg:
-                        out += self.bg_esc[bg]
+                        out += f"\x1b[48;5;{bg}m".encode()
                         last_bg = bg
-                    out += self.block
+                    out += "\u2580".encode()
                     cx += 1
 
         self.prev = cells
-        self.have_prev = True
         if out:
             sys.stdout.buffer.write(out)
             sys.stdout.buffer.flush()
@@ -361,14 +296,13 @@ def decode_raw(payload: bytes):
     pos = 4
     for y in range(height):
         x = 0
-        base = y * width
         while x < width and pos + 1 < len(payload):
             run, idx = payload[pos], payload[pos + 1]
             pos += 2
             if run == 0:
                 break
             end = min(x + run, width)
-            fb[base + x:base + end] = bytes((idx,)) * (end - x)
+            fb[y * width + x:y * width + end] = bytes([idx]) * (end - x)
             x = end
     return width, height, fb
 
@@ -444,42 +378,6 @@ if IS_WINDOWS:
         except Exception:
             pass
 
-    def fit_windows_console(cols: int, rows: int) -> None:
-        """Best-effort resize of a real Windows console to the ANSI grid."""
-        class COORD(ctypes.Structure):
-            _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
-
-        class SMALL_RECT(ctypes.Structure):
-            _fields_ = [("Left", ctypes.c_short), ("Top", ctypes.c_short),
-                        ("Right", ctypes.c_short), ("Bottom", ctypes.c_short)]
-
-        class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-            _fields_ = [("dwSize", COORD), ("dwCursorPosition", COORD),
-                        ("wAttributes", ctypes.c_ushort), ("srWindow", SMALL_RECT),
-                        ("dwMaximumWindowSize", COORD)]
-
-        try:
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.GetStdHandle(-11)
-            info = CONSOLE_SCREEN_BUFFER_INFO()
-            if not kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
-                return
-
-            cols = max(1, min(cols, info.dwMaximumWindowSize.X))
-            rows = max(1, min(rows, info.dwMaximumWindowSize.Y))
-
-            # Shrink the visible window before shrinking the buffer.
-            small = SMALL_RECT(0, 0,
-                               min(info.srWindow.Right, cols - 1),
-                               min(info.srWindow.Bottom, rows - 1))
-            kernel32.SetConsoleWindowInfo(handle, True, ctypes.byref(small))
-            kernel32.SetConsoleScreenBufferSize(handle, COORD(cols, rows))
-            full = SMALL_RECT(0, 0, cols - 1, rows - 1)
-            kernel32.SetConsoleWindowInfo(handle, True, ctypes.byref(full))
-            kernel32.SetConsoleCursorPosition(handle, COORD(0, 0))
-        except Exception:
-            pass
-
     def read_key() -> bytes:
         ch = msvcrt.getwch()
         if ch in ("\x00", "\xe0"):
@@ -489,9 +387,6 @@ if IS_WINDOWS:
 
 else:
     def enable_windows_ansi() -> None:
-        pass
-
-    def fit_windows_console(cols: int, rows: int) -> None:
         pass
 
     def read_escape() -> bytes:
@@ -541,17 +436,8 @@ def main(argv=None):
                 continue
             for frame_type, payload in parser_frames.feed(data):
                 if frame_type == FRAME_HELLO:
-                    label = payload[:6].decode("ascii", "replace") if len(payload) >= 6 else "?"
-                    if len(payload) >= 10:
-                        cols, rows = struct.unpack_from("<HH", payload, 6)
-                        if 20 <= cols <= 200 and 10 <= rows <= 120:
-                            terminal.set_size(cols, rows)
-                            fit_windows_console(cols, rows)
-                            sys.stderr.write(f"[bridge] firmware: {label}, ANSI {cols}x{rows}\r\n")
-                        else:
-                            sys.stderr.write(f"[bridge] firmware: {label}\r\n")
-                    else:
-                        sys.stderr.write(f"[bridge] firmware: {label}\r\n")
+                    if len(payload) >= 6:
+                        sys.stderr.write(f"[bridge] firmware: {payload[:6].decode('ascii', 'replace')}\r\n")
                 elif frame_type == FRAME_LOG:
                     sys.stderr.write("[doom] " + payload.decode("utf-8", "replace") + "\r\n")
                 elif frame_type == FRAME_PALETTE:

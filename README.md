@@ -3,13 +3,8 @@
 This project runs classic shareware DOOM on an ESP32-S3 and sends video to a
 host over a framed serial protocol. It supports **both** output styles:
 
-1. **ANSI terminal video** — 80x50 half-block cells, xterm-256 colours, averaged downscaling, dirty-cell updates.
+1. **ANSI terminal video** — 80x50 half-block cells, xterm-256 colours, dirty-cell updates.
 2. **Raw framebuffer streaming** — 160x100 indexed RLE frames plus a 768-byte palette frame.
-
-The default frame cap is **30 FPS**. The renderer averages every source pixel
-in each output cell, so walls and sprites look smoother than simple point
-sampling. CRC calculation is table-driven on the ESP and C-backed in the bridge,
-which keeps the higher frame rate from costing extra CPU time.
 
 There is **no SD card and no FAT filesystem**. The WAD lives in its own flash
 partition and is exposed to the engine as `/doom/doom1.wad` through a tiny
@@ -26,7 +21,7 @@ bridge — is installed under this folder:
 
 ## 1. Hardware requirements
 
-- ESP32-S3 board with **PSRAM** and at least **8 MB flash**; the default partition layout expects **16 MB flash**.
+- ESP32-S3 board with **PSRAM** and **8 MB flash** (default partition layout).
 - USB-Serial-JTAG is used by default. A UART1 fallback is available.
 - A terminal with xterm-256 colour support for ANSI mode.
 
@@ -109,7 +104,7 @@ idf.py menuconfig
 ```
 
 - `DOOM serial port` → USB-Serial-JTAG (default) or UART1 (TX=17, RX=18).
-- `DOOM serial video` → ANSI columns/rows, raw width/height, frame cap (30 FPS by default).
+- `DOOM serial video` → ANSI columns/rows, raw width/height, frame cap.
 
 ---
 
@@ -218,19 +213,12 @@ ESP-IDF boot logs remain on UART0; DOOM's `printf()` output arrives as framed
 Use Windows Terminal for ANSI colour support:
 
 ```bat
-tools\bridge.bat --port COM7 --mode ansi
-tools\bridge.bat --port COM7 --mode raw
+tools\bridge.bat --port COM3 --mode ansi
+tools\bridge.bat --port COM3 --mode raw
 ```
 
-`COM3` is normally the USB-UART console used for flashing and boot logs; `COM7`
-is the native USB-Serial-JTAG port used by the bridge. Your port numbers may
-differ — check Device Manager. You may need to move the USB-C cable between the
-board's two USB-C sockets.
-
 `bridge.py` supports Windows arrow keys through `msvcrt`; the Linux raw-terminal
-path is unchanged. On Windows, the bridge also makes a best-effort attempt to
-resize a real console to the ANSI grid advertised by the firmware when it
-receives the `HELLO` frame. Windows Terminal is still recommended.
+path is unchanged.
 
 ### Keys
 
@@ -319,6 +307,6 @@ Frame types to ESP:
 - **`cmake must be available on the PATH`** — put `$PWD/host-bin` first on `PATH`.
 - **`Could not automatically detect IDF_PATH`** — export `IDF_PATH` and `IDF_PATH_FORCE=1` as shown above.
 - **No picture in the bridge** — confirm the serial port and `--mode`; watch UART0 for boot logs.
-- **Garbled ANSI** — use an xterm-256-compatible terminal. The Windows bridge tries to size the console automatically; otherwise set an 80-column, 50-row window.
-- **Bad frame CRC messages** — wrong port, wrong baud (UART1 mode), or a noisy cable. The bridge throttles these messages to at most once per second.
+- **Garbled ANSI** — use an xterm-256-compatible terminal and an 80-column, 50-row window.
+- **Bad frame CRC messages** — wrong port, wrong baud (UART1 mode), or a noisy cable.
 - **`ERROR: No PSRAM detected`** — the board has no PSRAM; use an `N8R8`/`N8R2`-style module.

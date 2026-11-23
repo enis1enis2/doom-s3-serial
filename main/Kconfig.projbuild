@@ -58,7 +58,7 @@ menu "DOOM serial video"
 
     config DOOM_TARGET_FPS
         int "Frame cap"
-        default 30
+        default 20
         range 5 35
 
 endmenu
