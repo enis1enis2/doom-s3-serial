@@ -54,6 +54,12 @@ or, if it is missing or too small:
 The build uses `CONFIG_SPIRAM_IGNORE_NOTFOUND=y`, so a board without PSRAM still
 boots far enough to print that clear error instead of hanging in startup.
 
+The default configuration uses **octal-mode PSRAM** (`CONFIG_SPIRAM_MODE_OCT=y`),
+which matches ESP32-S3R8 / `N8R8` modules with 8 MiB embedded PSRAM. If your
+module is an `N8R2` / ESP32-S3R2 with 2 MiB PSRAM, change both `sdkconfig.defaults`
+and `sdkconfig` to `CONFIG_SPIRAM_MODE_QUAD=y` and rebuild — quad and octal
+PSRAM are not interchangeable.
+
 `esptool.py chip_id` reports the chip model/revision, and may report an
 `Embedded PSRAM` feature for chips with in-package PSRAM. `esptool.py flash_id`
 only reports the **flash** chip. Neither reliably detects external PSRAM soldered
